@@ -61,7 +61,7 @@ public class HudiPartitionManager
             ConnectorSession connectorSession,
             ExtendedHiveMetastore metastore,
             SchemaTableName schemaTableName,
-            TupleDomain<ColumnHandle> constraintSummary)
+            TupleDomain<HudiColumnHandle> constraintSummary)
     {
         MetastoreContext metastoreContext = toMetastoreContext(connectorSession);
         Optional<Table> table = metastore.getTable(metastoreContext, schemaTableName.getSchemaName(), schemaTableName.getTableName());
@@ -72,7 +72,7 @@ public class HudiPartitionManager
         }
 
         Map<Column, Domain> partitionPredicate = new HashMap<>();
-        Map<ColumnHandle, Domain> domains = constraintSummary.getDomains().orElseGet(ImmutableMap::of);
+        Map<HudiColumnHandle, Domain> domains = constraintSummary.getDomains().orElseGet(ImmutableMap::of);
         List<HudiColumnHandle> hudiColumnHandles = fromPartitionColumns(partitionColumns);
         for (int i = 0; i < hudiColumnHandles.size(); i++) {
             HudiColumnHandle column = hudiColumnHandles.get(i);
@@ -104,13 +104,13 @@ public class HudiPartitionManager
             String partitionName,
             List<HudiColumnHandle> partitionColumns,
             List<Type> partitionColumnTypes,
-            TupleDomain<ColumnHandle> constraintSummary)
+            TupleDomain<HudiColumnHandle> constraintSummary)
     {
         if (constraintSummary.isNone()) {
             return false;
         }
 
-        Map<ColumnHandle, Domain> domains = constraintSummary.getDomains().orElseGet(ImmutableMap::of);
+        Map<HudiColumnHandle, Domain> domains = constraintSummary.getDomains().orElseGet(ImmutableMap::of);
         Map<HudiColumnHandle, NullableValue> partitionValues = parsePartition(partitionName, partitionColumns, partitionColumnTypes);
         for (HudiColumnHandle column : partitionColumns) {
             NullableValue value = partitionValues.get(column);

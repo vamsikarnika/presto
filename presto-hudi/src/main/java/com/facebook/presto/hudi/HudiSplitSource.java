@@ -14,6 +14,7 @@
 
 package com.facebook.presto.hudi;
 
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.util.AsyncQueue;
 import com.facebook.presto.hudi.split.HudiBackgroundSplitLoader;

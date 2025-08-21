@@ -91,7 +91,7 @@ public class TestHudiPartitionManager
                         new OrcFileWriterConfig(),
                         new ParquetFileWriterConfig(),
                         new CacheConfig()).getSessionProperties());
-        TupleDomain<ColumnHandle> constraintSummary = TupleDomain.withColumnDomains(
+        TupleDomain<HudiColumnHandle> constraintSummary = TupleDomain.withColumnDomains(
                 ImmutableMap.of(
                         new HudiColumnHandle(
                                 MAX_PARTITION_KEY_COLUMN_INDEX,

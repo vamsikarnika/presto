@@ -15,6 +15,7 @@
 package com.facebook.presto.hudi;
 
 import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.HdfsContext;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
@@ -107,7 +108,7 @@ public class HudiSplitManager
 
         // Retrieve and prune partitions
         HoodieTimer timer = HoodieTimer.start();
-        List<String> partitions = hudiPartitionManager.getEffectivePartitions(session, metastore, table.getSchemaTableName(), layout.getTupleDomain());
+        List<String> partitions = hudiPartitionManager.getEffectivePartitions(session, metastore, table.getSchemaTableName(), layout.getRegularPredicates());
         log.debug("Took %d ms to get %d partitions", timer.endTimer(), partitions.size());
         if (partitions.isEmpty()) {
             return new FixedSplitSource(ImmutableList.of());

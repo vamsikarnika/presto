@@ -15,6 +15,8 @@
 package com.facebook.presto.hudi;
 
 import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.hive.HiveColumnHandle;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -33,7 +35,9 @@ public class HudiTableLayoutHandle
     private final List<HudiColumnHandle> dataColumns;
     private final List<HudiColumnHandle> partitionColumns;
     private final Map<String, String> tableParameters;
-    private final TupleDomain<ColumnHandle> tupleDomain;
+    private final TupleDomain<HudiColumnHandle> regularPredicates;
+    private final TupleDomain<HudiColumnHandle> partitionPredicates;
+    private final List<Type> partitionColumnTypes;
 
     @JsonCreator
     public HudiTableLayoutHandle(
@@ -41,13 +45,17 @@ public class HudiTableLayoutHandle
             @JsonProperty("dataColumns") List<HudiColumnHandle> dataColumns,
             @JsonProperty("partitionColumns") List<HudiColumnHandle> partitionColumns,
             @JsonProperty("tableParameters") Map<String, String> tableParameters,
-            @JsonProperty("tupleDomain") TupleDomain<ColumnHandle> tupleDomain)
+            @JsonProperty("tupleDomain") TupleDomain<HudiColumnHandle> regularPredicates,
+            @JsonProperty("partitionPredicate") TupleDomain<HudiColumnHandle> partitionPredicates,
+            @JsonProperty("partitionColumnTypes") List<Type> partitionColumnTypes)
     {
         this.table = requireNonNull(table, "table is null");
         this.dataColumns = requireNonNull(dataColumns, "dataColumns is null");
         this.partitionColumns = requireNonNull(partitionColumns, "partitionColumns is null");
         this.tableParameters = requireNonNull(tableParameters, "tableParameters is null");
-        this.tupleDomain = requireNonNull(tupleDomain, "tupleDomain is null");
+        this.regularPredicates = requireNonNull(regularPredicates, "tupleDomain is null");
+        this.partitionPredicates = requireNonNull(partitionPredicates, "partitionPredicate is null");
+        this.partitionColumnTypes = requireNonNull(partitionColumnTypes, "partitionColumnTypes is null");
     }
 
     @JsonProperty
@@ -75,9 +83,21 @@ public class HudiTableLayoutHandle
     }
 
     @JsonProperty
-    public TupleDomain<ColumnHandle> getTupleDomain()
+    public TupleDomain<HudiColumnHandle> getRegularPredicates()
     {
-        return tupleDomain;
+        return regularPredicates;
+    }
+
+    @JsonProperty
+    public TupleDomain<HudiColumnHandle> getPartitionPredicates()
+    {
+        return partitionPredicates;
+    }
+
+    @JsonProperty
+    public List<Type> getPartitionColumnTypes()
+    {
+        return partitionColumnTypes;
     }
 
     @Override
@@ -91,13 +111,13 @@ public class HudiTableLayoutHandle
         }
         HudiTableLayoutHandle that = (HudiTableLayoutHandle) o;
         return Objects.equals(table, that.table) &&
-                Objects.equals(tupleDomain, that.tupleDomain);
+                Objects.equals(regularPredicates, that.regularPredicates);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(table, tupleDomain);
+        return Objects.hash(table, regularPredicates);
     }
 
     @Override

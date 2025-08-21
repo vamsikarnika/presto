@@ -15,6 +15,7 @@
 package com.facebook.presto.hudi;
 
 import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveColumnConverterProvider;
@@ -121,12 +122,20 @@ public class HudiMetadata
         Table table = getTable(session, tableHandle);
         List<HudiColumnHandle> partitionColumns = getPartitionColumnHandles(table);
         List<HudiColumnHandle> dataColumns = getDataColumnHandles(table);
+        HudiPredicates predicates = HudiPredicates.from(constraint.getSummary());
+
+        List<Type> partitionTypes = partitionColumns.stream()
+                .map(column -> typeManager.getType(column.getHiveType().getTypeSignature()))
+                .toList();
+
         ConnectorTableLayout layout = new ConnectorTableLayout(new HudiTableLayoutHandle(
                 handle,
                 dataColumns,
                 partitionColumns,
                 table.getParameters(),
-                constraint.getSummary()));
+                predicates.getRegularColumnPredicates(),
+                predicates.getPartitionColumnPredicates(),
+                partitionTypes));
         return ImmutableList.of(new ConnectorTableLayoutResult(layout, constraint.getSummary()));
     }
 

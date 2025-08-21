@@ -16,6 +16,7 @@ package com.facebook.presto.hudi.split;
 
 import com.facebook.airlift.log.Logger;
 import com.facebook.airlift.units.DataSize;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.MetastoreContext;
 import com.facebook.presto.hive.util.AsyncQueue;
@@ -25,6 +26,7 @@ import com.facebook.presto.hudi.HudiSplit;
 import com.facebook.presto.hudi.HudiTableHandle;
 import com.facebook.presto.hudi.HudiTableLayoutHandle;
 import com.facebook.presto.hudi.HudiTableType;
+import com.facebook.presto.hudi.partition.HiveHudiPartitionInfo;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.schedule.NodeSelectionStrategy;
@@ -36,6 +38,7 @@ import org.apache.hudi.common.table.view.HoodieTableFileSystemView;
 import org.apache.hudi.common.util.HoodieTimer;
 import org.apache.hudi.storage.StoragePath;
 
+import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
@@ -66,7 +69,7 @@ public class HudiPartitionSplitGenerator
     private final Path tablePath;
     private final HoodieTableFileSystemView fsView;
     private final AsyncQueue<ConnectorSplit> asyncQueue;
-    private final Queue<String> concurrentPartitionQueue;
+    private final Deque<HiveHudiPartitionInfo> partitionQueue;
     private final String latestInstant;
     private final HudiSplitWeightProvider splitWeightProvider;
 
@@ -76,7 +79,7 @@ public class HudiPartitionSplitGenerator
             HudiTableLayoutHandle layout,
             HoodieTableFileSystemView fsView,
             AsyncQueue<ConnectorSplit> asyncQueue,
-            Queue<String> concurrentPartitionQueue,
+            Deque<HiveHudiPartitionInfo> partitionQueue,
             String latestInstant)
     {
         this.metastore = requireNonNull(metastore, "metastore is null");
@@ -86,7 +89,7 @@ public class HudiPartitionSplitGenerator
         this.tablePath = new Path(table.getPath());
         this.fsView = requireNonNull(fsView, "fsView is null");
         this.asyncQueue = requireNonNull(asyncQueue, "asyncQueue is null");
-        this.concurrentPartitionQueue = requireNonNull(concurrentPartitionQueue, "concurrentPartitionQueue is null");
+        this.partitionQueue = requireNonNull(partitionQueue, "concurrentPartitionQueue is null");
         this.latestInstant = requireNonNull(latestInstant, "latestInstant is null");
         this.splitWeightProvider = createSplitWeightProvider(requireNonNull(session, "session is null"));
     }
@@ -95,19 +98,19 @@ public class HudiPartitionSplitGenerator
     public void run()
     {
         HoodieTimer timer = HoodieTimer.start();
-        while (!concurrentPartitionQueue.isEmpty()) {
-            String partitionName = concurrentPartitionQueue.poll();
-            if (partitionName != null) {
-                generateSplitsFromPartition(partitionName);
+        while (!partitionQueue.isEmpty()) {
+            HiveHudiPartitionInfo hudiPartitionInfo = partitionQueue.poll();
+
+            if (hudiPartitionInfo != null && hudiPartitionInfo.getHivePartitionName() != null) {
+                generateSplitsFromPartition(hudiPartitionInfo);
             }
         }
         log.debug("Partition split generator finished in %d ms", timer.endTimer());
     }
 
-    private void generateSplitsFromPartition(String partitionName)
+    private void generateSplitsFromPartition(HiveHudiPartitionInfo hiveHudiPartitionInfo)
     {
-        HudiPartition hudiPartition = getHudiPartition(metastore, metastoreContext, layout, partitionName);
-        Path partitionPath = new Path(hudiPartition.getStorage().getLocation());
+        Path partitionPath = hiveHudiPartitionInfo.getPartitionPath();
         String relativePartitionPath = FSUtils.getRelativePartitionPath(new StoragePath(tablePath.toUri()), new StoragePath(partitionPath.toUri()));
         Stream<FileSlice> fileSlices = HudiTableType.MOR.equals(table.getTableType()) ?
                 fsView.getLatestMergedFileSlicesBeforeOrOn(relativePartitionPath, latestInstant) :

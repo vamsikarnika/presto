@@ -15,24 +15,38 @@
 package com.facebook.presto.hudi.split;
 
 import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
+import com.facebook.presto.hive.metastore.Partition;
 import com.facebook.presto.hive.util.AsyncQueue;
+import com.facebook.presto.hudi.HudiTableHandle;
 import com.facebook.presto.hudi.HudiTableLayoutHandle;
+import com.facebook.presto.hudi.partition.HiveHudiPartitionInfo;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.PrestoException;
+import org.apache.hadoop.fs.Path;
 import org.apache.hudi.common.table.view.HoodieTableFileSystemView;
 import org.apache.hudi.common.util.HoodieTimer;
+import org.apache.hudi.util.Lazy;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.facebook.presto.hudi.HudiErrorCode.HUDI_CANNOT_GENERATE_SPLIT;
 import static com.facebook.presto.hudi.HudiSessionProperties.getSplitGeneratorParallelism;
+import static com.facebook.presto.hudi.partition.HiveHudiPartitionInfo.NON_PARTITION;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -48,7 +62,7 @@ public class HudiBackgroundSplitLoader
     private final HudiTableLayoutHandle layout;
     private final HoodieTableFileSystemView fsView;
     private final AsyncQueue<ConnectorSplit> asyncQueue;
-    private final List<String> partitions;
+    private final Lazy<Map<String, Partition>> lazyPartitionMap;
     private final String latestInstant;
     private final int splitGeneratorNumThreads;
     private final ExecutorService splitGeneratorExecutorService;
@@ -60,7 +74,7 @@ public class HudiBackgroundSplitLoader
             HudiTableLayoutHandle layout,
             HoodieTableFileSystemView fsView,
             AsyncQueue<ConnectorSplit> asyncQueue,
-            List<String> partitions,
+            Lazy<Map<String, Partition>> lazyPartitionMap,
             String latestInstant)
     {
         this.session = requireNonNull(session, "session is null");
@@ -68,7 +82,7 @@ public class HudiBackgroundSplitLoader
         this.layout = requireNonNull(layout, "layout is null");
         this.fsView = requireNonNull(fsView, "fsView is null");
         this.asyncQueue = requireNonNull(asyncQueue, "asyncQueue is null");
-        this.partitions = requireNonNull(partitions, "partitions is null");
+        this.lazyPartitionMap = requireNonNull(lazyPartitionMap, "partitions is null");
         this.latestInstant = requireNonNull(latestInstant, "latestInstant is null");
 
         this.splitGeneratorNumThreads = getSplitGeneratorParallelism(session);
@@ -81,12 +95,16 @@ public class HudiBackgroundSplitLoader
         HoodieTimer timer = new HoodieTimer().startTimer();
         List<HudiPartitionSplitGenerator> splitGeneratorList = new ArrayList<>();
         List<Future> splitGeneratorFutures = new ArrayList<>();
-        ConcurrentLinkedQueue<String> concurrentPartitionQueue = new ConcurrentLinkedQueue<>(partitions);
+        Deque<HiveHudiPartitionInfo> partitionQueue = getPartitionInfos();
+        if (partitionQueue.isEmpty()) {
+            asyncQueue.finish();
+            return;
+        }
 
         // Start a number of partition split generators to generate the splits in parallel
         for (int i = 0; i < splitGeneratorNumThreads; i++) {
             HudiPartitionSplitGenerator generator = new HudiPartitionSplitGenerator(
-                    session, metastore, layout, fsView, asyncQueue, concurrentPartitionQueue, latestInstant);
+                    session, metastore, layout, fsView, asyncQueue, partitionQueue, latestInstant);
             splitGeneratorList.add(generator);
             splitGeneratorFutures.add(splitGeneratorExecutorService.submit(generator));
         }
@@ -102,5 +120,28 @@ public class HudiBackgroundSplitLoader
         }
         asyncQueue.finish();
         log.debug("Finished getting all splits in %d ms", timer.endTimer());
+    }
+
+    private Deque<HiveHudiPartitionInfo> getPartitionInfos()
+    {
+
+        Map<String, Partition> metadataPartitions = lazyPartitionMap.get();
+        List<String> allPartitions = new ArrayList<>(metadataPartitions.keySet());
+
+        return allPartitions.stream()
+                .map(partitionName -> buildHiveHudiPartitionInfo(partitionName, metadataPartitions.get(partitionName)))
+                .filter(hudiPartitionInfo -> hudiPartitionInfo.doesMatchPredicates() || hudiPartitionInfo.getHivePartitionName().equals(NON_PARTITION)).collect(Collectors.toCollection(ConcurrentLinkedDeque::new));
+    }
+
+    private HiveHudiPartitionInfo buildHiveHudiPartitionInfo(String partitionName, Partition partition)
+    {
+        return new HiveHudiPartitionInfo(
+                layout.getTable().getSchemaTableName(),
+                new Path(layout.getTable().getPath()),
+                partitionName,
+                partition,
+                layout.getPartitionColumns(),
+                layout.getPartitionColumnTypes(),
+                layout.getPartitionPredicates());
     }
 }
