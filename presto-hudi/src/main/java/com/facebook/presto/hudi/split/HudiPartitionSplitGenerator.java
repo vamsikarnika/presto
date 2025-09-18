@@ -170,7 +170,7 @@ public class HudiPartitionSplitGenerator
         List<HudiFile> logFiles = slice.getLogFiles()
                 .map(logFile -> new HudiFile(logFile.getPath().toString(), 0, logFile.getFileSize()))
                 .collect(toImmutableList());
-        long logFilesSize = logFiles.isEmpty() ? 0L : logFiles.stream().map(HudiFile::getLength).reduce(0L, Long::sum);
+        long logFilesSize = logFiles.isEmpty() ? 0L : logFiles.stream().mapToLong(HudiFile::getLength).sum();
         long sizeInBytes = baseFile != null ? baseFile.getLength() + logFilesSize : logFilesSize;
 
         return Optional.of(new HudiSplit(
