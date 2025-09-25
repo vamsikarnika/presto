@@ -14,15 +14,27 @@
 
 package com.facebook.presto.hudi;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.hive.metastore.Partition;
 import com.facebook.presto.hive.util.AsyncQueue;
+import com.facebook.presto.hudi.query.HudiDirectoryLister;
+import com.facebook.presto.hudi.query.HudiSnapshotDirectoryLister;
 import com.facebook.presto.hudi.split.HudiBackgroundSplitLoader;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorSplitSource;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.google.common.util.concurrent.Futures;
-import org.apache.hudi.common.table.view.HoodieTableFileSystemView;
+import org.apache.hudi.common.config.HoodieMetadataConfig;
+import org.apache.hudi.common.engine.HoodieEngineContext;
+import org.apache.hudi.common.engine.HoodieLocalEngineContext;
+import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.util.HoodieTimer;
+import org.apache.hudi.metadata.HoodieBackedTableMetadata;
+import org.apache.hudi.metadata.HoodieTableMetadata;
+import org.apache.hudi.util.Lazy;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -30,37 +42,70 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.airlift.concurrent.MoreFutures.toCompletableFuture;
+import static com.facebook.presto.hudi.HudiErrorCode.HUDI_CANNOT_OPEN_SPLIT;
+import static com.facebook.presto.hudi.HudiSessionProperties.isHudiMetadataTableEnabled;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 public class HudiSplitSource
         implements ConnectorSplitSource
 {
+    private static final Logger log = Logger.get(HudiSplitManager.class);
+
     private final AsyncQueue<ConnectorSplit> queue;
     private final HudiBackgroundSplitLoader splitLoader;
     private final ScheduledFuture splitLoaderFuture;
+    private final AtomicReference<PrestoException> prestoExceptionReference = new AtomicReference<>();
 
     public HudiSplitSource(
             ConnectorSession session,
             HudiTableLayoutHandle layout,
-            HoodieTableFileSystemView fsView,
-            Map<String, Partition> partitions,
-            String latestInstant,
+            Lazy<Map<String, Partition>> lazyPartitionMap,
             ExecutorService asyncQueueExecutor,
             ScheduledExecutorService splitLoaderExecutorService,
             ExecutorService splitGeneratorExecutorService,
             int maxOutstandingSplits)
     {
+        boolean enableMetadataTable = isHudiMetadataTableEnabled(session);
         this.queue = new AsyncQueue<>(maxOutstandingSplits, asyncQueueExecutor);
+
+        SchemaTableName schemaTableName = layout.getTable().getSchemaTableName();
+        Lazy<HoodieTableMetadata> lazyTableMetadata = Lazy.lazily(() -> {
+            HoodieTimer timer = HoodieTimer.start();
+            HoodieMetadataConfig metadataConfig = HoodieMetadataConfig.newBuilder()
+                    .enable(enableMetadataTable)
+                    .build();
+            HoodieTableMetaClient metaClient = layout.getTable().getMetaClient();
+            HoodieEngineContext engineContext = new HoodieLocalEngineContext(metaClient.getStorage().getConf());
+
+            HoodieTableMetadata tableMetadata = new HoodieBackedTableMetadata(
+                    engineContext,
+                    layout.getTable().getMetaClient().getStorage(), metadataConfig, metaClient.getBasePath().toString(), true);
+            log.info("Loaded table metadata for table: %s in %s ms", schemaTableName, timer.endTimer());
+            return tableMetadata;
+        });
+
+        HudiDirectoryLister hudiDirectoryLister = new HudiSnapshotDirectoryLister(
+                session,
+                layout,
+                enableMetadataTable,
+                lazyTableMetadata);
+
         this.splitLoader = new HudiBackgroundSplitLoader(
                 session,
                 splitGeneratorExecutorService,
                 layout,
-                fsView,
+                hudiDirectoryLister,
                 queue,
-                partitions,
-                latestInstant);
+                lazyPartitionMap,
+                enableMetadataTable,
+                throwable -> {
+                    prestoExceptionReference.compareAndSet(null, new PrestoException(HUDI_CANNOT_OPEN_SPLIT,
+                            "Failed to generate splits for " + schemaTableName, throwable));
+                    queue.finish();
+                });
         this.splitLoaderFuture = splitLoaderExecutorService.schedule(
                 this.splitLoader, 0, TimeUnit.MILLISECONDS);
     }

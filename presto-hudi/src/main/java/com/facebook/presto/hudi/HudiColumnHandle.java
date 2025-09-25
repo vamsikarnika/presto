@@ -114,6 +114,11 @@ public class HudiColumnHandle
         return columnType == ColumnType.REGULAR;
     }
 
+    public boolean isPartitionKey()
+    {
+        return columnType == ColumnType.PARTITION_KEY;
+    }
+
     public ColumnMetadata toColumnMetadata(TypeManager typeManager)
     {
         return ColumnMetadata.builder()

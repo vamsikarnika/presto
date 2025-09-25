@@ -32,6 +32,7 @@ public enum HudiErrorCode
     HUDI_CURSOR_ERROR(0x42, EXTERNAL),
     HUDI_CANNOT_GENERATE_SPLIT(0x43, EXTERNAL),
     HUDI_PARTITION_NOT_FOUND(0x44, EXTERNAL),
+    HUDI_BAD_DATA(0x45, EXTERNAL)
     /**/;
 
     private final ErrorCode errorCode;
