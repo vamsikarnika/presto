@@ -28,7 +28,6 @@ import com.facebook.presto.hive.metastore.PrestoTableType;
 import com.facebook.presto.hive.metastore.Storage;
 import com.facebook.presto.hive.metastore.StorageFormat;
 import com.facebook.presto.hive.metastore.Table;
-import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.google.common.collect.ImmutableList;
@@ -118,7 +117,7 @@ public class TestHudiPartitionManager
                         new OrcFileWriterConfig(),
                         new ParquetFileWriterConfig(),
                         new CacheConfig()).getSessionProperties());
-        TupleDomain<ColumnHandle> constraintSummary = TupleDomain.withColumnDomains(
+        TupleDomain<HudiColumnHandle> constraintSummary = TupleDomain.withColumnDomains(
                 ImmutableMap.of(
                         new HudiColumnHandle(
                                 MAX_PARTITION_KEY_COLUMN_INDEX,
@@ -127,7 +126,7 @@ public class TestHudiPartitionManager
                                 Optional.empty(),
                                 HudiColumnHandle.ColumnType.PARTITION_KEY),
                         Domain.singleValue(VARCHAR, utf8Slice("2019-07-23"))));
-        HudiTableHandle tableHandle = new HudiTableHandle(SCHEMA_NAME, TABLE_NAME, LOCATION, HudiTableType.COW);
+        HudiTableHandle tableHandle = new HudiTableHandle(SCHEMA_NAME, TABLE_NAME, LOCATION, HudiTableType.COW, "");
         Map<String, Partition> actualPartitions = hudiPartitionManager.getEffectivePartitions(
                 session,
                 metastore,

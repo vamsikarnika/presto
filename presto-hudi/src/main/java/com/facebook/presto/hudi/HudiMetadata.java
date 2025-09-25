@@ -16,9 +16,11 @@ package com.facebook.presto.hudi;
 
 import com.facebook.airlift.log.Logger;
 import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.hive.HdfsContext;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveColumnConverterProvider;
 import com.facebook.presto.hive.HiveType;
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.MetastoreContext;
@@ -40,7 +42,11 @@ import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import org.apache.hadoop.fs.Path;
+import org.apache.hudi.org.apache.avro.Schema;
+import org.apache.hudi.util.Lazy;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -51,7 +57,11 @@ import java.util.stream.Stream;
 import static com.facebook.presto.hive.HiveColumnHandle.MAX_PARTITION_KEY_COLUMN_INDEX;
 import static com.facebook.presto.hudi.HudiColumnHandle.ColumnType.PARTITION_KEY;
 import static com.facebook.presto.hudi.HudiColumnHandle.ColumnType.REGULAR;
+import static com.facebook.presto.hudi.HudiErrorCode.HUDI_FILESYSTEM_ERROR;
 import static com.facebook.presto.hudi.HudiErrorCode.HUDI_UNKNOWN_TABLE_TYPE;
+import static com.facebook.presto.hudi.HudiSessionProperties.isResolveColumnNameCasingEnabled;
+import static com.facebook.presto.hudi.util.HudiUtil.buildTableMetaClient;
+import static com.facebook.presto.hudi.util.HudiUtil.getLatestTableSchema;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
@@ -100,12 +110,31 @@ public class HudiMetadata
             throw new PrestoException(HUDI_UNKNOWN_TABLE_TYPE, "Unknown table type " + inputFormat);
         }
 
+        String basePath = table.getStorage().getLocation();
+        ExtendedFileSystem fs = getFileSystem(session, tableName, basePath);
         return new HudiTableHandle(
-                Optional.of(table),
+                table,
+                Lazy.lazily(() -> buildTableMetaClient(fs, tableName.getTableName(), basePath)),
                 table.getDatabaseName(),
                 table.getTableName(),
-                table.getStorage().getLocation(),
+                basePath,
                 hudiTableType);
+    }
+
+    private ExtendedFileSystem getFileSystem(ConnectorSession session, SchemaTableName table, String basePath)
+    {
+        HdfsContext hdfsContext = new HdfsContext(
+                session,
+                table.getSchemaName(),
+                table.getTableName(),
+                basePath,
+                false);
+        try {
+            return hdfsEnvironment.getFileSystem(hdfsContext, new Path(basePath));
+        }
+        catch (IOException e) {
+            throw new PrestoException(HUDI_FILESYSTEM_ERROR, "Could not open file system for " + table, e);
+        }
     }
 
     @Override
@@ -116,23 +145,25 @@ public class HudiMetadata
     }
 
     @Override
-    public ConnectorTableLayoutResult getTableLayoutForConstraint(
-            ConnectorSession session,
-            ConnectorTableHandle tableHandle,
-            Constraint<ColumnHandle> constraint,
-            Optional<Set<ColumnHandle>> desiredColumns)
+    public List<ConnectorTableLayoutResult> getTableLayouts(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
     {
-        HudiTableHandle handle = (HudiTableHandle) tableHandle;
+        HudiTableHandle hudiTableHandle = (HudiTableHandle) tableHandle;
         Table table = getTable(session, tableHandle);
         List<HudiColumnHandle> partitionColumns = getPartitionColumnHandles(table);
         List<HudiColumnHandle> dataColumns = getDataColumnHandles(table);
+        HudiPredicates predicates = HudiPredicates.from(constraint.getSummary());
+        Optional<Lazy<Schema>> hudiTableSchema = isResolveColumnNameCasingEnabled(session) ?
+                Optional.of(Lazy.lazily(() -> getLatestTableSchema(hudiTableHandle.getMetaClient(), hudiTableHandle.getTableName()))) : Optional.empty();
+
         ConnectorTableLayout layout = new ConnectorTableLayout(new HudiTableLayoutHandle(
-                handle,
+                hudiTableHandle,
                 dataColumns,
                 partitionColumns,
                 table.getParameters(),
-                constraint.getSummary()));
-        return new ConnectorTableLayoutResult(layout, constraint.getSummary());
+                predicates.getPartitionColumnPredicates(),
+                predicates.getRegularColumnPredicates(),
+                hudiTableSchema));
+        return ImmutableList.of(new ConnectorTableLayoutResult(layout, constraint.getSummary()));
     }
 
     @Override
@@ -175,7 +206,7 @@ public class HudiMetadata
     @Override
     public Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(ConnectorSession session, SchemaTablePrefix prefix)
     {
-        List<SchemaTableName> tables = prefix.getTableName() != null ? singletonList(prefix.toSchemaTableName()) : listTables(session, Optional.ofNullable(prefix.getSchemaName()));
+        List<SchemaTableName> tables = prefix.getTableName() != null ? singletonList(prefix.toSchemaTableName()) : listTables(session, Optional.of(prefix.getSchemaName()));
 
         ImmutableMap.Builder<SchemaTableName, List<ColumnMetadata>> columns = ImmutableMap.builder();
         for (SchemaTableName table : tables) {

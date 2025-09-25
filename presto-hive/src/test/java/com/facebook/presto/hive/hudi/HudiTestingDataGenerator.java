@@ -150,6 +150,7 @@ public class HudiTestingDataGenerator
         createTable(MERGE_ON_READ, "stock_ticks_morn_rt", dataDirectory.resolve("stock_ticks_morn").toString(), false);
         createTable(COPY_ON_WRITE, "stock_ticks_morn_only_log_ro", dataDirectory.resolve("stock_ticks_morn_only_log").toString(), false);
         createTable(MERGE_ON_READ, "stock_ticks_morn_only_log_rt", dataDirectory.resolve("stock_ticks_morn_only_log").toString(), false);
+        createTable(COPY_ON_WRITE, "stock_ticks_cow_multi_fg", dataDirectory.resolve("stock_ticks_cow_multi_fg").toString(), false);
     }
 
     private void createTable(HoodieTableType type, String name, String relativePath, boolean partitioned)
