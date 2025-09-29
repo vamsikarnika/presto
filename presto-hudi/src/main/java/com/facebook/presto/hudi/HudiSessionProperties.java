@@ -44,6 +44,7 @@ public class HudiSessionProperties
     private static final String MAX_OUTSTANDING_SPLITS = "max_outstanding_splits";
     private static final String SPLIT_GENERATOR_PARALLELISM = "split_generator_parallelism";
     static final String RESOLVE_COLUMN_NAME_CASING_ENABLED = "resolve_column_name_casing_enabled";
+    static final String TABLE_STATISTICS_ENABLED = "table_statistics_enabled";
 
     static final String COLUMN_STATS_INDEX_ENABLED = "column_stats_index_enabled";
     static final String COLUMN_STATS_WAIT_TIMEOUT = "column_stats_wait_timeout";
@@ -112,7 +113,12 @@ public class HudiSessionProperties
                         RESOLVE_COLUMN_NAME_CASING_ENABLED,
                         "Enable resolve column name casing",
                         hudiConfig.isResolveColumnNameCasingEnabled(),
-                        true));
+                        true),
+                booleanProperty(
+                        TABLE_STATISTICS_ENABLED,
+                        "Expose table statistics",
+                        hudiConfig.isTableStatisticsEnabled(),
+                        false));
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -169,4 +175,10 @@ public class HudiSessionProperties
     {
         return session.getProperty(RESOLVE_COLUMN_NAME_CASING_ENABLED, Boolean.class);
     }
+
+    public static boolean isTableStatisticsEnabled(ConnectorSession session)
+    {
+        return session.getProperty(TABLE_STATISTICS_ENABLED, Boolean.class);
+    }
+
 }

@@ -19,8 +19,11 @@ import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.MetastoreClientConfig;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.InMemoryCachingHiveMetastore;
+import com.facebook.presto.hudi.stats.ForHudiTableStatistics;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import jakarta.inject.Inject;
+
+import java.util.concurrent.ExecutorService;
 
 import static java.util.Objects.requireNonNull;
 
@@ -32,13 +35,15 @@ public class HudiMetadataFactory
     private final long perTransactionCacheMaximumSize;
     private final boolean metastoreImpersonationEnabled;
     private final int metastorePartitionCacheMaxColumnCount;
+    private final ExecutorService tableStatisticsExecutor;
 
     @Inject
     public HudiMetadataFactory(
             ExtendedHiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             TypeManager typeManager,
-            MetastoreClientConfig metastoreClientConfig)
+            MetastoreClientConfig metastoreClientConfig,
+            @ForHudiTableStatistics ExecutorService tableStatisticsExecutor)
     {
         this.metastore = requireNonNull(metastore, "metastore is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
@@ -46,6 +51,7 @@ public class HudiMetadataFactory
         this.perTransactionCacheMaximumSize = metastoreClientConfig.getPerTransactionMetastoreCacheMaximumSize();
         this.metastoreImpersonationEnabled = metastoreClientConfig.isMetastoreImpersonationEnabled();
         this.metastorePartitionCacheMaxColumnCount = metastoreClientConfig.getPartitionCacheColumnCountLimit();
+        this.tableStatisticsExecutor = requireNonNull(tableStatisticsExecutor, "tableStatisticsExecutor is null");
     }
 
     public ConnectorMetadata create()
@@ -53,6 +59,7 @@ public class HudiMetadataFactory
         return new HudiMetadata(
                 InMemoryCachingHiveMetastore.memoizeMetastore(metastore, metastoreImpersonationEnabled, perTransactionCacheMaximumSize, metastorePartitionCacheMaxColumnCount),
                 hdfsEnvironment,
-                typeManager);
+                typeManager,
+                tableStatisticsExecutor);
     }
 }

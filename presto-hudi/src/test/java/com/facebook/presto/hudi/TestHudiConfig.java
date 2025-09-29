@@ -42,7 +42,8 @@ public class TestHudiConfig
                 .setSplitGeneratorParallelism(4)
                 .setColumnStatsIndexEnabled(true)
                 .setColumnStatsWaitTimeout(new Duration(1, TimeUnit.SECONDS))
-                .setResolveColumnNameCasingEnabled(false));
+                .setResolveColumnNameCasingEnabled(false)
+                .setTableStatisticsExecutorParallelism(4));
     }
 
     @Test
@@ -59,6 +60,7 @@ public class TestHudiConfig
                 .put("hudi.index.column-stats-index-enabled", "false")
                 .put("hudi.index.column-stats.wait-timeout", "2s")
                 .put("hudi.table.resolve-column-name-casing.enabled", "true")
+                .put("hudi.table-statistics-executor-parallelism", "16")
                 .build();
 
         HudiConfig expected = new HudiConfig()
@@ -71,7 +73,8 @@ public class TestHudiConfig
                 .setSplitGeneratorParallelism(8)
                 .setColumnStatsIndexEnabled(false)
                 .setColumnStatsWaitTimeout(new Duration(2, TimeUnit.SECONDS))
-                .setResolveColumnNameCasingEnabled(true);
+                .setResolveColumnNameCasingEnabled(true)
+                .setTableStatisticsExecutorParallelism(16);
 
         assertFullMapping(properties, expected);
     }

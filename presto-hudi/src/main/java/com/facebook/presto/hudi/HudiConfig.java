@@ -36,6 +36,8 @@ public class HudiConfig
     private int splitLoaderParallelism = 4;
     private int splitGeneratorParallelism = 4;
     private boolean resolveColumnNameCasingEnabled;
+    private boolean tableStatisticsEnabled = true;
+    private int tableStatisticsExecutorParallelism = 4;
 
     private boolean isColumnStatsIndexEnabled = true;
     private Duration columnStatsWaitTimeout = new Duration(1, SECONDS);
@@ -176,6 +178,33 @@ public class HudiConfig
     public HudiConfig setResolveColumnNameCasingEnabled(boolean resolveColumnNameCasingEnabled)
     {
         this.resolveColumnNameCasingEnabled = resolveColumnNameCasingEnabled;
+        return this;
+    }
+
+    @Config("hudi.table-statistics-enabled")
+    @ConfigDescription("Enable table statistics for query planning.")
+    public HudiConfig setTableStatisticsEnabled(boolean tableStatisticsEnabled)
+    {
+        this.tableStatisticsEnabled = tableStatisticsEnabled;
+        return this;
+    }
+
+    public boolean isTableStatisticsEnabled()
+    {
+        return this.tableStatisticsEnabled;
+    }
+
+    @Min(1)
+    public int getTableStatisticsExecutorParallelism()
+    {
+        return tableStatisticsExecutorParallelism;
+    }
+
+    @Config("hudi.table-statistics-executor-parallelism")
+    @ConfigDescription("Number of threads to asynchronously generate table statistics.")
+    public HudiConfig setTableStatisticsExecutorParallelism(int parallelism)
+    {
+        this.tableStatisticsExecutorParallelism = parallelism;
         return this;
     }
 }
