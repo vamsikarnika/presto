@@ -25,6 +25,8 @@ import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.MetastoreContext;
 import com.facebook.presto.hive.metastore.Table;
+import com.facebook.presto.hudi.stats.HudiTableStatistics;
+import com.facebook.presto.hudi.stats.TableStatisticsReader;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
@@ -40,9 +42,18 @@ import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
+import com.facebook.presto.spi.statistics.Estimate;
+import com.facebook.presto.spi.statistics.TableStatistics;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.apache.hadoop.fs.Path;
+import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.table.timeline.HoodieInstant;
+import org.apache.hudi.common.table.timeline.versioning.v2.InstantComparatorV2;
+import org.apache.hudi.common.util.CollectionUtils;
+import org.apache.hudi.common.util.HoodieTimer;
+import org.apache.hudi.common.util.Option;
+import org.apache.hudi.metadata.MetadataPartitionType;
 import org.apache.hudi.org.apache.avro.Schema;
 import org.apache.hudi.util.Lazy;
 
@@ -51,6 +62,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -59,7 +72,9 @@ import static com.facebook.presto.hudi.HudiColumnHandle.ColumnType.PARTITION_KEY
 import static com.facebook.presto.hudi.HudiColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hudi.HudiErrorCode.HUDI_FILESYSTEM_ERROR;
 import static com.facebook.presto.hudi.HudiErrorCode.HUDI_UNKNOWN_TABLE_TYPE;
+import static com.facebook.presto.hudi.HudiSessionProperties.isHudiMetadataTableEnabled;
 import static com.facebook.presto.hudi.HudiSessionProperties.isResolveColumnNameCasingEnabled;
+import static com.facebook.presto.hudi.HudiSessionProperties.isTableStatisticsEnabled;
 import static com.facebook.presto.hudi.util.HudiUtil.buildTableMetaClient;
 import static com.facebook.presto.hudi.util.HudiUtil.getLatestTableSchema;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -68,6 +83,12 @@ import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
+import static org.apache.hudi.common.table.timeline.HoodieInstant.State.COMPLETED;
+import static org.apache.hudi.common.table.timeline.HoodieTimeline.CLUSTERING_ACTION;
+import static org.apache.hudi.common.table.timeline.HoodieTimeline.COMMIT_ACTION;
+import static org.apache.hudi.common.table.timeline.HoodieTimeline.DELTA_COMMIT_ACTION;
+import static org.apache.hudi.common.table.timeline.HoodieTimeline.INDEXING_ACTION;
+import static org.apache.hudi.common.table.timeline.HoodieTimeline.REPLACE_COMMIT_ACTION;
 
 public class HudiMetadata
         implements ConnectorMetadata
@@ -77,15 +98,20 @@ public class HudiMetadata
     private final ExtendedHiveMetastore metastore;
     private final HdfsEnvironment hdfsEnvironment;
     private final TypeManager typeManager;
+    private final ExecutorService tableStatisticsExecutor;
+    private static final Map<TableStatisticsCacheKey, HudiTableStatistics> tableStatisticsCache = new ConcurrentHashMap<>();
+    private static final Set<TableStatisticsCacheKey> refreshingKeysInProgress = ConcurrentHashMap.newKeySet();
 
     public HudiMetadata(
             ExtendedHiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
-            TypeManager typeManager)
+            TypeManager typeManager,
+            ExecutorService tableStatisticsExecutor)
     {
         this.metastore = requireNonNull(metastore, "metastore is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.tableStatisticsExecutor = requireNonNull(tableStatisticsExecutor, "tableStatisticsExecutor is null");
     }
 
     @Override
@@ -220,6 +246,20 @@ public class HudiMetadata
         return columns.build();
     }
 
+    @Override
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Optional<ConnectorTableLayoutHandle> tableLayoutHandle, List<ColumnHandle> columnHandles, Constraint<ColumnHandle> constraint)
+    {
+        if (!isTableStatisticsEnabled(session) || !isHudiMetadataTableEnabled(session)) {
+            return TableStatistics.empty();
+        }
+
+        List<HudiColumnHandle> hudiColumnHandles = columnHandles.stream()
+                .map(e -> (HudiColumnHandle) e)
+                .toList();
+        return getTableStatisticsFromCache(
+                (HudiTableHandle) tableHandle, hudiColumnHandles, tableStatisticsCache, refreshingKeysInProgress, tableStatisticsExecutor);
+    }
+
     public ExtendedHiveMetastore getMetastore()
     {
         return metastore;
@@ -305,4 +345,95 @@ public class HudiMetadata
     {
         return new HudiColumnHandle(index, column.getName(), column.getType(), column.getComment(), PARTITION_KEY);
     }
+
+    private static TableStatistics getTableStatisticsFromCache(
+            HudiTableHandle tableHandle,
+            List<HudiColumnHandle> columnHandles,
+            Map<TableStatisticsCacheKey, HudiTableStatistics> cache,
+            Set<TableStatisticsCacheKey> refreshingKeysInProgress,
+            ExecutorService tableStatisticsExecutor)
+    {
+        TableStatisticsCacheKey key = new TableStatisticsCacheKey(tableHandle.getPath());
+        HudiTableStatistics cachedValue = cache.get(key);
+        TableStatistics statisticsToReturn = TableStatistics.empty();
+        if (cachedValue != null) {
+            // Here we avoid checking the latest commit which requires loading the meta client and timeline
+            // which can block query planning. We assume that the cache result might be stale but close
+            // enough for CBO.
+            log.info("Returning cached table statistics for table: %s, latest commit in cache: %s",
+                    tableHandle.getSchemaTableName(), cachedValue.latestCommit());
+            statisticsToReturn = cachedValue.tableStatistics();
+        }
+
+        triggerAsyncStatsRefresh(tableHandle, columnHandles, cache, key, refreshingKeysInProgress, tableStatisticsExecutor);
+        return statisticsToReturn;
+    }
+
+    private static void triggerAsyncStatsRefresh(
+            HudiTableHandle tableHandle,
+            List<HudiColumnHandle> columnHandles,
+            Map<TableStatisticsCacheKey, HudiTableStatistics> cache,
+            TableStatisticsCacheKey key,
+            Set<TableStatisticsCacheKey> refreshingKeysInProgress,
+            ExecutorService tableStatisticsExecutor)
+    {
+        if (refreshingKeysInProgress.add(key)) {
+            tableStatisticsExecutor.submit(() -> {
+                HoodieTimer refreshTimer = HoodieTimer.start();
+                try {
+                    log.info("Starting async statistics calculation for table: %s", tableHandle.getSchemaTableName());
+                    HoodieTableMetaClient metaClient = tableHandle.getMetaClient();
+                    Option<HoodieInstant> latestCommitOption = metaClient.getActiveTimeline()
+                            .getTimelineOfActions(CollectionUtils.createSet(
+                                    COMMIT_ACTION, DELTA_COMMIT_ACTION, REPLACE_COMMIT_ACTION, CLUSTERING_ACTION, INDEXING_ACTION))
+                            .filterCompletedInstants().lastInstant();
+
+                    if (latestCommitOption.isEmpty()) {
+                        log.info("Putting table statistics of 0 row in %s ms for empty table: %s",
+                                refreshTimer.endTimer(), tableHandle.getSchemaTableName());
+                        cache.put(key, new HudiTableStatistics(
+                                // A dummy instant that does not match any commit
+                                new HoodieInstant(COMPLETED, COMMIT_ACTION, "", InstantComparatorV2.REQUESTED_TIME_BASED_COMPARATOR),
+                                TableStatistics.builder().setRowCount(Estimate.of(0)).build()));
+                        return;
+                    }
+
+                    HoodieInstant latestCommit = latestCommitOption.get();
+                    HudiTableStatistics oldValue = cache.get(key);
+                    if (oldValue != null && latestCommit.equals(oldValue.latestCommit())) {
+                        log.info("Table statistics is still valid for table: %s (checked in %s ms)",
+                                tableHandle.getSchemaTableName(), refreshTimer.endTimer());
+                        return;
+                    }
+
+                    if (!metaClient.getTableConfig().isMetadataTableAvailable()
+                            || !metaClient.getTableConfig().isMetadataPartitionAvailable(MetadataPartitionType.COLUMN_STATS)) {
+                        log.info("Putting empty table statistics in %s ms as metadata table or "
+                                        + "column stats is not available for table: %s",
+                                refreshTimer.endTimer(), tableHandle.getSchemaTableName());
+                        cache.put(key, new HudiTableStatistics(latestCommit, TableStatistics.empty()));
+                        return;
+                    }
+
+                    TableStatistics newStatistics = TableStatisticsReader.create(metaClient)
+                            .getTableStatistics(latestCommit, columnHandles);
+                    HudiTableStatistics newValue = new HudiTableStatistics(latestCommit, newStatistics);
+                    cache.put(key, newValue);
+                    log.info("Async table statistics calculation finished in %s ms for table: %s, commit: %s",
+                            refreshTimer.endTimer(), tableHandle.getSchemaTableName(), latestCommit);
+                }
+                catch (Exception e) {
+                    log.error(e, "Error calculating table statistics asynchronously for table %s", tableHandle.getSchemaTableName());
+                }
+                finally {
+                    refreshingKeysInProgress.remove(key);
+                }
+            });
+        }
+        else {
+            log.debug("Table statistics refresh already in progress for table: %s", tableHandle.getSchemaTableName());
+        }
+    }
+
+    private record TableStatisticsCacheKey(String basePath) {}
 }
