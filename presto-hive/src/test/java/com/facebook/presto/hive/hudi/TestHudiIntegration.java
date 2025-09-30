@@ -64,7 +64,8 @@ public class TestHudiIntegration
                         "('stock_ticks_morn_ro')," +
                         "('stock_ticks_morn_rt')," +
                         "('stock_ticks_morn_only_log_ro')," +
-                        "('stock_ticks_morn_only_log_rt')");
+                        "('stock_ticks_morn_only_log_rt')," +
+                        "('stock_ticks_cow_multi_fg')");
 
         FunctionAndTypeManager typeManager = getQueryRunner().getMetadata().getFunctionAndTypeManager();
 

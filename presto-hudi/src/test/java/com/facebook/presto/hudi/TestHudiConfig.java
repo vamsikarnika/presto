@@ -15,10 +15,12 @@
 package com.facebook.presto.hudi;
 
 import com.facebook.airlift.units.DataSize;
+import com.facebook.airlift.units.Duration;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
@@ -37,7 +39,10 @@ public class TestHudiConfig
                 .setMinimumAssignedSplitWeight(0.05)
                 .setMaxOutstandingSplits(1000)
                 .setSplitLoaderParallelism(4)
-                .setSplitGeneratorParallelism(4));
+                .setSplitGeneratorParallelism(4)
+                .setColumnStatsIndexEnabled(true)
+                .setColumnStatsWaitTimeout(new Duration(1, TimeUnit.SECONDS))
+                .setResolveColumnNameCasingEnabled(false));
     }
 
     @Test
@@ -51,6 +56,9 @@ public class TestHudiConfig
                 .put("hudi.max-outstanding-splits", "300")
                 .put("hudi.split-loader-parallelism", "2")
                 .put("hudi.split-generator-parallelism", "8")
+                .put("hudi.index.column-stats-index-enabled", "false")
+                .put("hudi.index.column-stats.wait-timeout", "2s")
+                .put("hudi.table.resolve-column-name-casing.enabled", "true")
                 .build();
 
         HudiConfig expected = new HudiConfig()
@@ -60,7 +68,10 @@ public class TestHudiConfig
                 .setMinimumAssignedSplitWeight(0.1)
                 .setMaxOutstandingSplits(300)
                 .setSplitLoaderParallelism(2)
-                .setSplitGeneratorParallelism(8);
+                .setSplitGeneratorParallelism(8)
+                .setColumnStatsIndexEnabled(false)
+                .setColumnStatsWaitTimeout(new Duration(2, TimeUnit.SECONDS))
+                .setResolveColumnNameCasingEnabled(true);
 
         assertFullMapping(properties, expected);
     }

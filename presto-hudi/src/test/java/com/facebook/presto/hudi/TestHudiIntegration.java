@@ -14,7 +14,12 @@
 
 package com.facebook.presto.hudi;
 
+import com.facebook.presto.Session;
+import com.facebook.presto.execution.QueryInfo;
+import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
+import com.facebook.presto.tests.DistributedQueryRunner;
+import com.facebook.presto.tests.ResultWithQueryId;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.Test;
 
@@ -22,6 +27,7 @@ import java.util.Optional;
 
 import static com.facebook.presto.hudi.HudiQueryRunner.createHudiQueryRunner;
 import static java.lang.String.format;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestHudiIntegration
         extends com.facebook.presto.hive.hudi.TestHudiIntegration
@@ -41,5 +47,25 @@ public class TestHudiIntegration
                 "('GOOG', '2018-08-31 09:59:00', '2018-08-31')," +
                 "('GOOG', '2018-08-31 10:59:00', '2018-08-31')";
         assertQuery(format(sqlTemplate, "stock_ticks_cow"), sqlResult);
+    }
+
+    @Test
+    public void testColStatsFileSkipping()
+    {
+        @Language("SQL") String sqlTemplate1 = "SELECT symbol, ts FROM %s";
+        @Language("SQL") String sqlTemplate2 = "SELECT symbol, ts FROM %s WHERE symbol = 'ITC'";
+
+        Session session = SessionBuilder.from(getSession())
+                .withMdtEnabled(true)
+                .withColumnStatsEnabled(true)
+                .withColumnStatsWaitTimeout("10s")
+                .build();
+        DistributedQueryRunner queryRunner = (DistributedQueryRunner) getQueryRunner();
+        ResultWithQueryId<MaterializedResult> totalRes = queryRunner.executeWithQueryId(session, format(sqlTemplate1, "stock_ticks_cow_multi_fg"));
+        ResultWithQueryId<MaterializedResult> prunedRes = queryRunner.executeWithQueryId(session, format(sqlTemplate2, "stock_ticks_cow_multi_fg"));
+
+        QueryInfo queryInfo1 = queryRunner.getCoordinator().getQueryManager().getFullQueryInfo(totalRes.getQueryId());
+        QueryInfo queryInfo2 = queryRunner.getCoordinator().getQueryManager().getFullQueryInfo(prunedRes.getQueryId());
+        assertThat(queryInfo2.getQueryStats().getTotalSplits()).isLessThan(queryInfo1.getQueryStats().getTotalSplits());
     }
 }
